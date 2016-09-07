@@ -1,6 +1,6 @@
 """
 #######################################################################
-scale_keys v1.3
+scalist v1.3
 by Eric Luhta
 
 Last update: 7/20/2016
@@ -194,17 +194,17 @@ def do_scale(pivot, user_scale, scale_type):
 # User Interface
 
 def WindowUI():
-    windowID = "scale_keys"
+    windowID = "scalist"
 
     if pm.window(windowID, exists=True):
         pm.deleteUI(windowID)
 
-    testWindow = pm.window(windowID, title="scale keys", width=225, height=285, mnb=False, mxb=False, sizeable=True)
+    testWindow = pm.window(windowID, title="scalist", width=225, height=285, mnb=False, mxb=False, sizeable=True)
 
     mainLayout = pm.columnLayout(w=190, h=285)
 
     # get the header image from the user's prefs
-    imagePath = pm.internalVar(upd=True) + "icons/scale_keys.png"
+    imagePath = pm.internalVar(upd=True) + "icons/scalist.png"
     pm.image(w=225, h=75, image=imagePath)
 
     form = pm.formLayout()
