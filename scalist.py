@@ -1,6 +1,6 @@
 """
 #######################################################################
-scalist v1.3
+scale_keys v1.3
 by Eric Luhta
 
 Last update: 7/20/2016
@@ -16,9 +16,9 @@ INSTALL:
 TO RUN:
 Save the following as a python shelf button and add the scalist_icon for maximum performance.
 
-import scale_keys
-reload(scale_keys)
-scale_keys
+import scalist
+reload(scalist)
+scalist
 
 #######################################################################
 
@@ -199,7 +199,7 @@ def WindowUI():
     if pm.window(windowID, exists=True):
         pm.deleteUI(windowID)
 
-    testWindow = pm.window(windowID, title="scalist", width=225, height=285, mnb=False, mxb=False, sizeable=True)
+    testWindow = pm.window(windowID, title="scale keys", width=225, height=285, mnb=False, mxb=False, sizeable=True)
 
     mainLayout = pm.columnLayout(w=190, h=285)
 
