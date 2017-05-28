@@ -1,9 +1,9 @@
 """
 #######################################################################
-scale_keys v1.3
+scale_keys v1.5
 by Eric Luhta
 
-Last update: 7/20/2016
+Last update: 5/27/2017
 
 Makes scaling curves in the graph editor vastly more powerful and simple.
 Helpful info can be found in the tool's "About" tab.
@@ -16,9 +16,9 @@ INSTALL:
 TO RUN:
 Save the following as a python shelf button and add the scalist_icon for maximum performance.
 
-import scalist
-reload(scalist)
-scalist
+import scale_keys
+reload(scale_keys)
+scale_keys
 
 #######################################################################
 
@@ -27,6 +27,7 @@ scalist
 import pymel.core as pm
 
 __author__ = 'Eric Luhta'
+
 
 ########################################################################
 # Scalist Class
@@ -56,7 +57,10 @@ class Scalist(object):
                     'pivot_current_time': self.pivot_current_time,
                     'pivot_last_selected_time': self.pivot_last_selected_time,
                     'pivot_flip_curve_value': self.pivot_flip_curve_value,
-                    'pivot_first_value': self.pivot_first_value}
+                    'pivot_first_value': self.pivot_first_value,
+                    'pivot_ramped_value': self.pivot_ramped_value,
+                    'pivot_flip_zero_value': self.pivot_flip_zero_value
+                    }
 
         # Get the function from the switcher dictionary
         func = switcher.get(self.pivot)
@@ -109,9 +113,18 @@ class Scalist(object):
         return self.key_values[0]
 
     def pivot_flip_curve_value(self):
-        """Returns -1 to invert selected curves"""
+        """Sets scale to -1 and returns middle value to invert selected curves"""
         self.scale = -1
         return self.pivot_middle_value()
+
+    def pivot_flip_zero_value(self):
+        """Sets scale to -1 and returns zero to flip curves over 0"""
+        self.scale = -1
+        return self.pivot_zero_value()
+
+    def pivot_ramped_value(self):
+        """Scales gradually over the selected range"""
+        pass
 
     #############################################################################
     # Scale functions
@@ -144,7 +157,17 @@ class Scalist(object):
 
         for curve in self.curves:
             self.key_times = self.get_key_times(curve)
-            pm.scaleKey(curve, timePivot=(self.get_pivot()), timeScale=self.scale)
+
+            # if we're scaling time from the last key, we need to iterate backwards through the scaling or some values
+            # will give weird results as the first keys end up after ones not yet scaled
+            if self.pivot == 'pivot_last_time':
+                key_range = reversed(xrange(len(self.key_times)))
+            else:
+                key_range = xrange(len(self.key_times))
+
+            for i in key_range:
+                pm.scaleKey(curve, timePivot=(self.get_pivot()), timeScale=self.scale, time=(self.key_times[i], self.key_times[i]))
+
             pm.snapKey(tm=1.0)
 
     ##########################################################################
@@ -173,143 +196,180 @@ class Scalist(object):
         """Get list of times for an individual curve"""
         return pm.keyframe(curve, query=True, selected=True, timeChange=True, absolute=True)
 
+
 #############################################################################
 # Scaling tool functions
 
-def check_for_selected_keys():
+def check_for_selected_keys(pivot):
     """ Makes sure there are keys selected in the graph editor """
     selected_keys = pm.keyframe(q=True, sl=True)
+
+    # a few of the pivots could feasibly be used with just a single keyframe selected so allow those
+    single_key_exceptions = ['pivot_zero_value', 'pivot_current_time', 'pivot_flip_zero_value']
+
     if len(selected_keys) >= 2:
+        return True
+    elif len(selected_keys) > 0 and pivot in single_key_exceptions:
         return True
     pm.warning('[scalist.py] Please select at least 2 keyframes.'),
     return False
 
 
 def do_scale(pivot, user_scale, scale_type):
-    if check_for_selected_keys():
+    """If selection is ok, create an instance and do the scaling"""
+    if check_for_selected_keys(pivot):
         scalist = Scalist(pivot, user_scale, scale_type)
         scalist.get_scale_type()
 
-#################################################################################
-# User Interface
 
-def WindowUI():
-    windowID = "scalist"
+# UI
 
-    if pm.window(windowID, exists=True):
-        pm.deleteUI(windowID)
+class Window_UI:
+    def __init__(self):
+        if pm.window('scalist', exists=True):
+            pm.deleteUI('scalist')
+        self.window_id = 'scalist'
 
-    testWindow = pm.window(windowID, title="scale keys", width=225, height=285, mnb=False, mxb=False, sizeable=True)
+    def update_slider(self, ctrl, val):
+        """updates the slider when a scale amount preset button is clicked"""
+        pm.floatSliderGrp(ctrl, edit=True, v=val)
 
-    mainLayout = pm.columnLayout(w=190, h=285)
+    def rgb(self, values):
+        """converts rgb values to 0.0-1.0 for maya flags"""
+        converted = []
+        for val in values:
+            converted.append(round(val / 255.0, 3))
+        return converted
 
-    # get the header image from the user's prefs
-    imagePath = pm.internalVar(upd=True) + "icons/scalist.png"
-    pm.image(w=225, h=75, image=imagePath)
+    def build_ui(self):
+        """builds the ui window"""
 
-    form = pm.formLayout()
-    tabs = pm.tabLayout(innerMarginWidth=5, innerMarginHeight=5, w=220, h=205)
-    pm.formLayout(form, edit=True,
-                  attachForm=((tabs, 'top', 0), (tabs, 'left', 0), (tabs, 'bottom', 0), (tabs, 'right', 0)))
+        tool_window = pm.window(self.window_id, title="scalist", width=368, height=295, mnb=True, mxb=True,
+                                sizeable=True)
+        main_layout = pm.rowColumnLayout(w=368, h=295)
 
-    # Main tool tab
-    child1 = pm.rowColumnLayout(numberOfColumns=5, columnWidth=[(1, 60), (2, 40), (3, 10), (4, 60), (5, 40)])
+        # get the header image from the user's prefs
+        imagePath = pm.internalVar(upd=True) + "icons/scalist.png"
+        pm.image(w=225, h=75, image=imagePath)
 
-    # user scale amount section
+        # scale amount slider
+        user_scale = pm.floatSliderGrp(label='Amount', field=True, precision=2, width=363, minValue=-2.0, maxValue=5.0,
+                                       v=1.0, fieldMinValue=-10.0, fieldMaxValue=10.0)
 
-    pm.text(label="Amount", bgc=(.969, .922, .145))
-    user_scale = pm.floatField(precision=2, value=1.0)
-    pm.separator(style='none')
-    pm.separator(style='none')
-    pm.separator(style='none')
+        # scale preset buttons
+        btn_layout = pm.rowColumnLayout(nc=11)
 
-    # separator line
-    pm.separator(style='none', h=10)
-    pm.separator(style='none', h=10)
-    pm.separator(style='single', h=10)
-    pm.separator(style='none', h=10)
-    pm.separator(style='none', h=10)
-
-    # Headers for value and time
-    pm.text(label="Value", font="boldLabelFont")
-    pm.separator(style='none')
-    pm.separator(style='single', horizontal=False)
-    pm.text(label="Time", font="boldLabelFont")
-    pm.separator(style='none')
-
-    # Buttons
-
-    # row 1
-    pm.button(label="Mid", bgc=(.780, .780, .780), command=pm.Callback(do_scale, 'pivot_middle_value', user_scale, 'scale_keys_value'))
-    pm.button(label="M", bgc=(.1, .1, .1), command=pm.Callback(do_scale, 'pivot_middle_value', user_scale, 'scale_keys_value_multi'))
-    pm.separator(style='single', horizontal=False)
-    pm.button(label="First", bgc=(.780, .780, .780), command=pm.Callback(do_scale, 'pivot_first_time', user_scale, 'scale_keys_time'))
-    pm.button(label="M", bgc=(.1, .1, .1), command=pm.Callback(do_scale, 'pivot_first_time', user_scale, 'scale_keys_time_multi'))
-    # row 2
-    pm.button(label="Highest", bgc=(.780, .780, .780), command=pm.Callback(do_scale, 'pivot_highest_value', user_scale, 'scale_keys_value'))
-    pm.button(label="M", bgc=(.1, .1, .1), command=pm.Callback(do_scale, 'pivot_highest_value', user_scale, 'scale_keys_value_multi'))
-    pm.separator(style='single', horizontal=False)
-    pm.button(label="Last", bgc=(.780, .780, .780), command=pm.Callback(do_scale, 'pivot_last_time', user_scale, 'scale_keys_time'))
-    pm.button(label="M", bgc=(.1, .1, .1), command=pm.Callback(do_scale, 'pivot_last_selected_time', user_scale, 'scale_keys_time_multi'))
-    # row 3
-    pm.button(label="Lowest", bgc=(.780, .780, .780), command=pm.Callback(do_scale, 'pivot_lowest_value', user_scale, 'scale_keys_value'))
-    pm.button(label="M", bgc=(.1, .1, .1), command=pm.Callback(do_scale, 'pivot_lowest_value', user_scale, 'scale_keys_value_multi'))
-    pm.separator(style='single', horizontal=False)
-    pm.button(label="Current", bgc=(.780, .780, .780), command=pm.Callback(do_scale, 'pivot_current_time', user_scale, 'scale_keys_time'))
-    pm.separator(style='none')
-    # row 4
-    pm.button(label="0", bgc=(.780, .780, .780), command=pm.Callback(do_scale, 'pivot_zero_value', user_scale, 'scale_keys_value'))
-    pm.separator(style='none')
-    pm.separator(style='single', horizontal=False)
-    pm.button(label="Last Sel", bgc=(.780, .780, .780), command=pm.Callback(do_scale, 'pivot_last_selected_time', user_scale, 'scale_keys_time'))
-    pm.separator(style='none')
-    # row 5
-    pm.button(label="Last Sel", bgc=(.780, .780, .780), command=pm.Callback(do_scale, 'pivot_last_selected_value', user_scale, 'scale_keys_value'))
-    pm.separator(style='none')
-    pm.separator(style='single', horizontal=False)
-    pm.separator(style='none')
-    pm.separator(style='none')
-    # row 6
-    pm.button(label="First", bgc=(.780, .780, .780), command=pm.Callback(do_scale, 'pivot_first_value', user_scale, 'scale_keys_value_multi'))
-    pm.separator(style='none')
-    pm.separator(style='single', horizontal=False)
-    pm.button(label="Flip", bgc=(.969, .922, .145), command=pm.Callback(do_scale, 'pivot_flip_curve_value', user_scale, 'scale_keys_value_multi'))
-    pm.setParent('..')
-
-    # About tab content
-    child2 = pm.rowColumnLayout(numberOfColumns=2, columnWidth=(105, 105))
-    aboutText = ""
-    aboutText += "Amount is in 100%, so .9 will reduce by 10%, 1.1 will increase by 10%, etc.\n"
-    aboutText += "\n"
-    aboutText += "All keys are placed on even frames, no subframes.\n"
-    aboutText += "\n"
-    aboutText += "The M button next to several pivots is for scaling multiple selected curves relative to themselves. "\
-            "If you have multiple curves or groups of keys selected and want to scale each one up/down based on its " \
-            "own midpoint, highest key, or lowest key use the M button. The main pivot button will take the pivot based" \
-            " on the mid, highest, or lowest of all selected curves/keys if used on multiple selections.\n"
-    aboutText += "\n"
-    aboutText += "Use the main operation button when you are working on only one curve or a group of keys on a curve.\n"
-    aboutText += "\n"
-    aboutText += "For predictable time scaling results, every curve should have a key at the pivot you're using.\n"
-    aboutText += "\n"
-    aboutText += "Middle will calculate the midpoint from highest and lowest keys on a selected curve or keys and scale from there.\n"
-    aboutText += "\n"
-    aboutText += "Last selected will use the last selected key as the pivot point. Use ctrl-selecting to specify what you want.\n"
-    aboutText += "\n"
-    aboutText += "Lowest and Highest use the respective key in the selection as the pivot.\n"
-    aboutText += "\n"
-    aboutText += "First is rather niche but can be handy in cycles or when you want to tone up/down a curve but keep " \
-            "the first pose the same. It scales from the first value on each curve.\n"
-    aboutText += "\n"
-    aboutText += "Flip is a simple quick way to invert selected curves from their center value pivot.\n"
-
-    pm.scrollField(editable=False, wordWrap=True, w=210, text=aboutText)
-    pm.setParent('..')
-
-    # Tabs
-    pm.tabLayout(tabs, edit=True, tabLabel=((child1, 'Scaling'), (child2, 'About')))
-    pm.showWindow(testWindow)
+        btn_1 = pm.button(label='-1', w=33, bgc=self.rgb([231, 205, 59]),
+                          c=pm.Callback(self.update_slider, user_scale, -1))
+        btn_2 = pm.button(label='.25', w=33, c=pm.Callback(self.update_slider, user_scale, 0.25))
+        btn_3 = pm.button(label='.50', w=33, c=pm.Callback(self.update_slider, user_scale, 0.5))
+        btn_4 = pm.button(label='.75', w=33, c=pm.Callback(self.update_slider, user_scale, 0.75))
+        btn_5 = pm.button(label='.90', w=33, c=pm.Callback(self.update_slider, user_scale, 0.9))
+        btn_6 = pm.button(label='reset', w=33, bgc=self.rgb([231, 205, 59]),
+                          c=pm.Callback(self.update_slider, user_scale, 1.0))
+        btn_7 = pm.button(label='1.1', w=33, bgc=self.rgb([215, 215, 215]),
+                          c=pm.Callback(self.update_slider, user_scale, 1.1))
+        btn_8 = pm.button(label='1.25', w=33, bgc=self.rgb([215, 215, 215]),
+                          c=pm.Callback(self.update_slider, user_scale, 1.25))
+        btn_9 = pm.button(label='1.5', w=33, bgc=self.rgb([215, 215, 215]),
+                          c=pm.Callback(self.update_slider, user_scale, 1.5))
+        btn_10 = pm.button(label='1.75', w=33, bgc=self.rgb([215, 215, 215]),
+                           c=pm.Callback(self.update_slider, user_scale, 1.75))
+        btn_11 = pm.button(label='x2', w=33, bgc=self.rgb([231, 205, 59]),
+                           c=pm.Callback(self.update_slider, user_scale, 2.0))
 
 
-# Let's see if this code is worth the price we paid for it.
-WindowUI()
+        # headers
+        pm.setParent(main_layout)
+        pm.separator(style='none', h=5)
+        categories = pm.rowColumnLayout(nc=3)
+        pm.text(label='Value', w=177, font='boldLabelFont', bgc=self.rgb([231, 205, 59]))
+        pm.separator(style='single', w=10)
+        pm.text(label='Time', w=179, font='boldLabelFont', bgc=self.rgb([20, 20, 20]))
+        pm.separator(style='none', h=5)
+        pm.separator(style='single', w=10)
+        pm.separator(style='none', h=5)
+
+        # pivot buttons
+        pm.setParent('..')
+        pivot_buttons = pm.rowColumnLayout(nc=5)
+        pb1 = pm.button(label='Mid', w=88, annotation='Scaled from midpoint value of curve',
+                        bgc=self.rgb([215, 215, 215]),
+                        command=pm.Callback(do_scale, 'pivot_middle_value', user_scale, 'scale_keys_value'))
+        pb2 = pm.button(label='Multi', w=89, annotation='Each curve scaled from its own midpoint',
+                        bgc=self.rgb([45, 45, 45]),
+                        command=pm.Callback(do_scale, 'pivot_middle_value', user_scale, 'scale_keys_value_multi'))
+        pm.separator(style='single', w=10)
+        pb3 = pm.button(label='First', w=87, annotation='Scaled from first frame of selection',
+                        bgc=self.rgb([120, 120, 120]),
+                        command=pm.Callback(do_scale, 'pivot_first_time', user_scale, 'scale_keys_time'))
+        pb4 = pm.button(label='Multi', w=88, annotation='Each curve scaled from its first frame',
+                        bgc=self.rgb([45, 45, 45]),
+                        command=pm.Callback(do_scale, 'pivot_first_time', user_scale, 'scale_keys_time_multi'))
+        pb5 = pm.button(label='Highest', w=87, annotation='Scaled from the highest key value selected',
+                        bgc=self.rgb([215, 215, 215]),
+                        command=pm.Callback(do_scale, 'pivot_highest_value', user_scale, 'scale_keys_value'))
+        pb6 = pm.button(label='Multi', w=88, annotation='Each curve scaled from its highest selected key',
+                        bgc=self.rgb([45, 45, 45]),
+                        command=pm.Callback(do_scale, 'pivot_highest_value', user_scale, 'scale_keys_value_multi'))
+        pm.separator(style='single', w=10)
+        pb7 = pm.button(label='Last', w=89, annotation='Scaled from last frame of selection',
+                        bgc=self.rgb([120, 120, 120]),
+                        command=pm.Callback(do_scale, 'pivot_last_time', user_scale, 'scale_keys_time'))
+        pb8 = pm.button(label='Multi', w=88, annotation='Each curve scaled from its last frame',
+                        bgc=self.rgb([45, 45, 45]),
+                        command=pm.Callback(do_scale, 'pivot_last_time', user_scale, 'scale_keys_time_multi'))
+        pb9 = pm.button(label='Lowest', w=87, annotation='Scaled from the lowest key value selected',
+                        bgc=self.rgb([215, 215, 215]),
+                        command=pm.Callback(do_scale, 'pivot_lowest_value', user_scale, 'scale_keys_value'))
+        pb10 = pm.button(label='Multi', w=88, annotation='Each curve scaled from its lowest selected key',
+                         bgc=self.rgb([45, 45, 45]),
+                         command=pm.Callback(do_scale, 'pivot_lowest_value', user_scale, 'scale_keys_value_multi'))
+        pm.separator(style='single', w=10)
+        pb11 = pm.button(label='Current', w=89, annotation='Scaled from the current frame in timerange',
+                         bgc=self.rgb([120, 120, 120]),
+                         command=pm.Callback(do_scale, 'pivot_current_time', user_scale, 'scale_keys_time'))
+        pm.separator(style='none')
+        pb12 = pm.button(label='0', w=87, annotation='Scaled from 0', bgc=self.rgb([215, 215, 215]),
+                         command=pm.Callback(do_scale, 'pivot_zero_value', user_scale, 'scale_keys_value'))
+        pm.separator(style='none')
+        pm.separator(style='single', w=10)
+        pb13 = pm.button(label='Last Selected', w=89, annotation='Scaled in time from the last selected key frame',
+                         bgc=self.rgb([120, 120, 120]),
+                         command=pm.Callback(do_scale, 'pivot_last_selected_time', user_scale, 'scale_keys_time'))
+        pm.separator(style='none')
+        pb14 = pm.button(label='Last Selected', w=87, annotation='Scaled in value from the last selected key',
+                         bgc=self.rgb([215, 215, 215]),
+                         command=pm.Callback(do_scale, 'pivot_last_selected_value', user_scale, 'scale_keys_value'))
+        pm.separator(style='none')
+        pm.separator(style='single', w=10)
+        pm.separator(style='in')
+        pm.separator(style='in')
+        pb15 = pm.button(label='First', w=87, annotation='Each curve selected from its earliest selected key',
+                         bgc=self.rgb([215, 215, 215]),
+                         command=pm.Callback(do_scale, 'pivot_first_value', user_scale, 'scale_keys_value_multi'))
+        pm.separator(style='none')
+        pm.separator(style='single', w=10)
+
+        pb16 = pm.button(label='Flip Mid', w=77, annotation='Flip each selected curve along its midpoint value',
+                         bgc=self.rgb([231, 205, 59]),
+                         command=pm.Callback(do_scale, 'pivot_flip_curve_value', user_scale, 'scale_keys_value_multi'))
+
+        pb17 = pm.button(label='Flip 0', w=77, annotation='Flip each selected curve over 0',
+                         bgc=self.rgb([231, 205, 59]),
+                         command=pm.Callback(do_scale, 'pivot_flip_zero_value', user_scale, 'scale_keys_value'))
+
+        pm.setParent('..')
+        pm.separator(h=10, style='in')
+
+        pm.showWindow(tool_window)
+
+
+w = Window_UI()
+w.build_ui()
+
+
+
+
+
+
